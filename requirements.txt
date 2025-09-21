@@ -1,0 +1,10 @@
+torch>=1.13.0       # or latest matching your CUDA (if GPU)
+transformers>=4.30
+datasets>=2.10
+scikit-learn
+pandas
+numpy
+matplotlib
+seaborn
+streamlit
+evaluate
