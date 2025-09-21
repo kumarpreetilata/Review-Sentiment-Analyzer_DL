@@ -1,49 +1,53 @@
-import pandas as pd
-import torch
-from transformers import TrainingArguments, Trainer
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
-from datasets import Dataset
-import evaluate
-import numpy as np
 import os
+import pandas as pd
+import numpy as np
+import torch
+from datasets import Dataset
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer, EarlyStoppingCallback
+from sklearn.model_selection import train_test_split
+import evaluate
 
 # -----------------------
-# Load dataset
+# Load Dataset
 # -----------------------
-df = pd.read_csv("data/reviews.csv")
-df = df.dropna(subset=["review", "label"])  
-
-# If label is already numeric (0,1,2), just use as-is
-label2id = {0: 0, 1: 1, 2: 2}  # map integers to themselves
-id2label = {0: "Negative", 1: "Neutral", 2: "Positive"}
-
-# Convert to HuggingFace Dataset
-dataset = Dataset.from_pandas(df[["review", "label"]])
+df = pd.read_csv("data/reviews.csv").dropna(subset=["review", "label"])
 
 # -----------------------
-# Train/test split
+# Stratified Train/Test Split
 # -----------------------
-dataset = dataset.train_test_split(test_size=0.2, seed=42)
+train_df, test_df = train_test_split(
+    df,
+    test_size=0.2,
+    random_state=42,
+    stratify=df["label"]  # preserves label distribution
+)
+
+train_ds = Dataset.from_pandas(train_df.reset_index(drop=True))
+test_ds = Dataset.from_pandas(test_df.reset_index(drop=True))
 
 # -----------------------
-# Tokenization
+# Tokenizer
 # -----------------------
-MODEL_NAME = "bert-base-uncased"  # can switch to distilbert-base-uncased for faster training
+MODEL_NAME = "distilbert-base-uncased"  # fast & lightweight
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
 def tokenize(batch):
-    return tokenizer(batch["review"], padding="max_length", truncation=True)
+    return tokenizer(batch["review"], padding=True, truncation=True)  # dynamic padding
 
-tokenized_ds = dataset.map(tokenize, batched=True)
+tokenized_train = train_ds.map(tokenize, batched=True)
+tokenized_test = test_ds.map(tokenize, batched=True)
 
 # -----------------------
-# Load model
+# Model
 # -----------------------
+label2id = {0:0, 1:1, 2:2}
+id2label = {0:"Negative",1:"Neutral",2:"Positive"}
+
 model = AutoModelForSequenceClassification.from_pretrained(
     MODEL_NAME,
     num_labels=3,
     id2label=id2label,
-    label2id={str(k): v for k, v in label2id.items()}
+    label2id=label2id
 )
 
 # -----------------------
@@ -65,36 +69,48 @@ def compute_metrics(eval_pred):
     }
 
 # -----------------------
-# Training
+# Training Arguments
 # -----------------------
 training_args = TrainingArguments(
     output_dir="outputs/bert_sentiment",
     eval_strategy="epoch",
     save_strategy="epoch",
     learning_rate=2e-5,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
-    num_train_epochs=3,
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=16,
+    num_train_epochs=10,          # longer training for small dataset
     weight_decay=0.01,
     logging_dir="logs",
     logging_steps=10,
+    load_best_model_at_end=True,
+    metric_for_best_model="f1",
+    greater_is_better=True,
+    save_total_limit=2,
 )
 
+# -----------------------
+# Trainer
+# -----------------------
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=tokenized_ds["train"],
-    eval_dataset=tokenized_ds["test"],
+    train_dataset=tokenized_train,
+    eval_dataset=tokenized_test,
     tokenizer=tokenizer,
     compute_metrics=compute_metrics,
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]  # stops if f1 doesn't improve
 )
 
+# -----------------------
+# Train
+# -----------------------
 trainer.train()
 
 # -----------------------
-# Save model & tokenizer
+# Save Model & Tokenizer
 # -----------------------
 os.makedirs("outputs/bert_sentiment", exist_ok=True)
 trainer.save_model("outputs/bert_sentiment")
 tokenizer.save_pretrained("outputs/bert_sentiment")
-print("Model and tokenizer saved to outputs/bert_sentiment/")
+
+print("Training complete. Model saved to outputs/bert_sentiment/")
