@@ -1,10 +1,13 @@
 torch>=1.13.0       # or latest matching your CUDA (if GPU)
-transformers>=4.30
-datasets>=2.10
 scikit-learn
 pandas
 numpy
 matplotlib
 seaborn
 streamlit
-evaluate
+transformers[torch]
+accelerate>=0.26.0
+transformers==4.56.2 
+datasets==4.1.1 
+evaluate==0.4.6 
+tokenizers==0.22.1
